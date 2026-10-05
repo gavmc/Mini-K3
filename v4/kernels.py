@@ -14,10 +14,21 @@ def pt_recurrent_kda(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, g: torch
 
 
 @triton.jit
+def recurrent_kda_kernel(q, k, v, g, beta, state, scale, BK, BV):
+    pid = tl.program_id(0)   
+
+    rk = tl.arange(0, BK)
+    rv = pid * BV + tl.arange(0, BV)
+
+
+
 def recurrent_kda(q, k, v, g, beta, state, scale):
-    BK = triton.next_power_of_2(k)
-    BV = 32
-    grid = (triton.cdiv(v, BV) * N)
+
+    B, H, K = k.shape
+    _, _, V = v.shape
+
+    BK = triton.next_power_of_2(K)
+    BV = 4 # <- needs to be tested (default test value)
 
 
 
@@ -26,9 +37,9 @@ B, H, dk, dv = 1, 8, 32, 64
 
 
 q = torch.rand(B, H, dk)
-k = torch.rand(B, H, dk)
+k = torch.nn.functional.normalize(k, dim=-1)
 v = torch.rand(B, H, dv)
-g = torch.rand(B, H, dk)
+g = -torch.rand(B, H, dk)
 beta = torch.rand(B, H)
 state = torch.rand(B, H, dk, dv)
 scale = 1 / torch.sqrt(torch.tensor(dk, dtype=torch.float32))
