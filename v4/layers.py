@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 
+from kernels import recurrent_kda_fwd, recurrent_kda_bkw
+
 
 class KDAFunction(torch.autograd.Function):
     @staticmethod
