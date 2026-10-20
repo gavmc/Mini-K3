@@ -1,149 +1,165 @@
-# MiniK3 — Scaled-Down Kimi K3 Reproduction
+# Mini-K3
 
-A single-GPU PyTorch reproduction of the Kimi K3 architecture (Moonshot AI, 2026), scaled to ~155M total / ~70M active parameters so it trains on an RTX 3090/4090. This is the **v3** iteration of the repo; see [`v1/`](v1/) and [`v2/`](v2/) for earlier experiments.
+**Small language models built and trained from scratch on a single RTX 3090.**
 
-The goal is architectural fidelity — every component (KDA, Gated MLA, Block AttnRes, Stable LatentMoE with SiTU-GLU) is implemented to match the equations in the K3 technical report, just shrunk to fit consumer VRAM.
+Mini-K3 is an independent PyTorch research project exploring Kimi-inspired architectures at consumer-GPU scale: Kimi Delta Attention (KDA), gated multi-head latent attention, mixture-of-experts FFNs, and attention residuals.
 
-> **Status:** Architecture is implemented and benchable. Next up: Quantile Balancing, Per-Head Muon optimizer, and a real training run.
+The project has evolved from architectural reproduction toward a more practical question: **which of these ideas actually improve a small model under a limited training budget?** V4 is the current development effort. Earlier versions remain in the repository for reference.
 
----
+> **Status:** V4 is under construction. Attention layers and experimental KDA kernels are present, but the full V4 language model and training pipeline are not yet complete. This is an educational research project, not an official Moonshot AI implementation or a production assistant.
 
-## Architecture
+## Goals
 
-| Component | MiniK3 (v3) | K3 (report) |
-|---|---|---|
-| `d_model` | **640** | 7,168 |
-| Latent MoE dim `d_latent` | **320** (0.5×) | 3,584 (0.5×) |
-| Expert hidden `d_expert` | **512** | 3,072 |
-| Shared expert hidden `d_shared` | **1024** | — |
-| Layers | **12** | 93 |
-| Attention | **9 KDA + 3 Gated MLA** | 69 KDA + 24 MLA |
-| Routed experts | **16** | 896 |
-| Active per token | **2** of 16 (8× sparsity) | 16 of 896 (56×) |
-| Shared experts | **1** | 2 |
-| Heads | **8** | 96 |
-| KDA `d_k` / `d_v` | **128 / 64** | — |
-| MLA `d_head` | **128** | — |
-| Vocab | **16,000** (BPE, tied) | 160K |
-| Context (bench) | **16K** | 1M |
-| **Total / Active** | **~155.7M / ~69.7M** | 2.78T / 104B |
+- Train a useful small language model on one 24 GB GPU.
+- Improve instruction following, short-form generation, summarization, and rewriting over earlier checkpoints.
+- Compare model width, depth, and parameter count through controlled experiments.
+- Evaluate dense FFNs against small MoE configurations rather than assume MoE is better at this scale.
+- Use established kernels for model training while retaining custom Triton implementations for learning and correctness experiments.
 
-### Hybrid Attention (3:1 KDA : MLA)
+## Versions
 
-- **KDA layers** use FLA's `chunk_kda` kernel with `use_qk_l2norm_in_kernel=True`. Inputs go through `ShortConvolution` (default `silu` / Swish), then L2-normalized queries/keys. Decay is lower-bounded via `g = g_min · sigmoid(exp(A_h) · z)` with `g_min = -5` and per-head log-scale `A_h` initialized to 0 (Eq. 5 in the report).
-- **Gated MLA layers** compress KV into a latent `c = W_c x`, reconstruct k/v from `c`, and apply a full-rank sigmoid output gate. No positional encoding anywhere (NoPE) — the KDA layers handle position implicitly.
-- The final layer is always MLA, matching K3's "additional Gated MLA layer at the end of the backbone."
+| Version | Purpose | What is in the repository |
+| --- | --- | --- |
+| [`v1/`](v1/) | Early MoE experiments | Expert training and merging code |
+| [`v2/`](v2/) | Earlier end-to-end Mini-K3 iteration | Model, data preparation, pretraining, SFT, sampling, optimizer code, and design notes |
+| [`v3/`](v3/) | FLA-based architecture prototype | Hybrid KDA/MLA model, latent MoE, AttnRes, configuration, and a synthetic training benchmark |
+| [`v4/`](v4/) | Current rebuild | Attention layers, dtype configuration, custom KDA experiments, and an unfinished model scaffold |
 
-### Block Attention Residuals (AttnRes)
+These versions are separate experiments. Their configurations, checkpoints, and entry points are not interchangeable.
 
-Replaces the standard residual stream with attention over prior layer/module outputs. Each module (mixer or FFN/MoE) has its own learnable pseudo-query `w`, and the backbone accumulates partial sums within blocks. At block boundaries the full block representation becomes a source for subsequent layers. A final AttnRes aggregates all blocks for the head.
+## V4 architecture
 
-*Note:* The current implementation applies AttnRes at **module granularity** (2 per layer-pair) rather than K3's layer granularity, giving more pseudo-queries and finer-grained partial sums. `attnres_block=6` counts module outputs (~3 attention+FFN layers per block at L=12).
+### Kimi Delta Attention
 
-### Stable LatentMoE
+The KDA layer in [`v4/layers.py`](v4/layers.py) includes:
 
-- **Routed path:** `W_down` projects to latent space, then top-k experts (SiTU-GLU with `β₁=4`, `β₂=25`) operate in that latent space. Aggregated outputs pass through an RMSNorm before `W_up` projects back to full width — this is the "Normalized LatentMoE" from §2.3.1.
-- **Shared expert:** one dense FFN (SiTU-GLU) that bypasses the latent path entirely. Layer 0 is a dense FFN instead of MoE, matching K3's single dense layer.
-- **Router:** `sigmoid(W_r x)` at full width. Top-k selection uses a per-expert bias `b`, but mixture weights `p` are computed from the **unbiased** scores (Eq. 13). Currently uses sign-based load balancing (`bias_lr * sign(err)`). Quantile Balancing (Eq. 14 / Appendix C) is planned.
-- **Capacity capping:** tokens beyond `1.5×` the target load per expert are zero-weighted (dropped). This is a training-time safety; K3 uses MoonEP's perfect balance instead.
+- Separate query, key, and value projections.
+- Short causal convolutions on Q, K, and V.
+- Per-head update strengths and per-key-channel decay gates.
+- Query/key L2 normalization inside the FLA kernel.
+- Per-head output RMSNorm and a learned sigmoid output gate.
+- Recurrent-state and convolution-state cache interfaces.
 
-### Dense FFN
+The layer uses [flash-linear-attention](https://github.com/fla-org/flash-linear-attention): `chunk_kda` for training and multi-token processing, and `fused_recurrent_kda` for single-token evaluation with gradients disabled.
 
-Layer 0 uses a dense FFN with SiTU-GLU. All other layers use MoE.
+Each KDA layer maintains its own recurrent state. During prefill it produces an output for every input token; during decoding it processes the new token using that layer's cached state.
 
----
+### Gated latent attention
 
-## Project Structure
+The `MLA` layer compresses each token to a normalized latent representation, reconstructs per-head keys and values, and applies causal scaled dot-product attention. A learned sigmoid gate modulates the attention output before the output projection.
 
+It currently uses **no explicit positional encoding** and provides a latent-cache interface for incremental decoding, including an offset causal mask when extending a cache with multiple tokens.
+
+This is a straightforward latent-attention implementation: it reconstructs keys and values from the cached latents on each call. It does not yet implement an optimized weight-absorbed MLA decoding path.
+
+### Backbone and FFNs
+
+The V4 backbone is not assembled yet: `MiniK3.forward` is a placeholder and the V4 `MoE` class is a scaffold. Layer scheduling, residual connections, FFNs, embedding/head tying, and model-wide cache management still need to be integrated.
+
+The initial experiment plan is to establish a dense-FFN hybrid baseline, then test MoE and additional architectural features separately. A 3:1 KDA-to-MLA schedule is a starting candidate, not a demonstrated optimum at this size.
+
+## Model-size experiments
+
+V4's final size is not fixed. The following are **proposed configurations**, not trained models or the current defaults in `v4/config.py`.
+
+| Candidate | Hidden width | Layers | Attention heads | SwiGLU intermediate width | Estimated total parameters |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Small baseline | 576 | 24 | 9 | 2,304 | ~153M |
+| Main candidate | 768 | 28 | 12 | 3,072 | ~302M |
+| Larger candidate | 896 | 36 | 14 | 3,584 | ~514M |
+
+These estimates assume a 32K vocabulary, tied embeddings, 64-dimensional key/value heads, dense FFNs, and a 3:1 KDA/MLA schedule. Counts must be checked against the assembled models. Whether a configuration fits and trains efficiently depends on sequence length, batch size, checkpointing, and kernel behavior.
+
+The working target is approximately **20B pretraining tokens for the selected model**, after smaller pilot runs. Architecture and training budgets may change based on measured throughput and validation results.
+
+## Custom KDA kernels
+
+[`v4/kernels/`](v4/kernels/) contains the learning-oriented implementations:
+
+| File | Contents |
+| --- | --- |
+| [`recurrent_kda.py`](v4/kernels/recurrent_kda.py) | PyTorch recurrent forward/backward references and Triton recurrent kernels |
+| [`chunkwise_kda.py`](v4/kernels/chunkwise_kda.py) | Experimental chunkwise work, including a PyTorch reference |
+| [`tests.py`](v4/kernels/tests.py) | Recurrent backward comparisons against PyTorch autograd |
+
+The backward test constructs a real forward state history and checks gradients for Q, K, V, decay gates, update strengths, and the initial state. It tests both zero and nonzero final-state gradients.
+
+Storage and compute dtypes for the custom kernels are configured through `dtypes`, `torch_map`, and `tl_map` in [`v4/config.py`](v4/config.py). This configuration does not automatically control the precision of every FLA or PyTorch operation.
+
+## Getting started
+
+### Environment
+
+Development targets an NVIDIA RTX 3090 with 24 GB VRAM, a Ryzen 5 5600X, and 64 GB DDR4 RAM.
+
+Use a CUDA-enabled PyTorch installation and compatible versions of Triton and flash-linear-attention. A Linux or WSL2 CUDA environment is a practical starting point; consult the upstream FLA installation instructions for supported versions and optional convolution dependencies.
+
+The repository does not yet provide a pinned environment or package installer. V4 also imports Pydantic. After installing CUDA-enabled PyTorch, install the remaining dependencies for your environment, including:
+
+```bash
+pip install pydantic flash-linear-attention
 ```
-MoE/
-├── README.md
-├── v1/                     # GPT-2 style domain-specific MoE experts (legacy)
-├── v2/                     # Earlier Kimi K3 scratch attempt, design notes in structure.md
-└── v3/                     # Current MiniK3 implementation
-    ├── model.py            # MiniK3 model (KDA, MLA, MoE, AttnRes)
-    ├── config.py           # Model + training hyperparameters
-    └── bench.py            # Benchmark: param counts, tok/s, MFU, token-budget projection
+
+Follow upstream instructions if your platform needs additional build steps. This command alone is not a complete CUDA environment setup.
+
+```bash
+git clone https://github.com/gavmc/Mini-K3.git
+cd Mini-K3
 ```
 
----
+### Run the recurrent backward test
 
-## Usage
+Run from `v4/` so the current local imports resolve:
 
-### Benchmark
+```bash
+cd v4
+python -m kernels.tests
+```
+
+The test requires CUDA and Triton. A successful run prints gradient differences and finishes with `All backward gradients match autograd.`
+
+### Run the V3 synthetic benchmark
+
+From the repository root:
 
 ```bash
 cd v3
 python bench.py
 ```
 
-This compiles the model (`torch.compile`), runs a few warmup + measured steps, and prints:
-- Total / non-embedding / active parameter counts
-- Step time and tok/s
-- Model FLOP/s and MFU (vs RTX 3090 BF16 peak ~71 TFLOP/s)
-- Chinchilla-optimal token budget and wall-clock estimates for 5B–30B tokens
+The benchmark uses random tokens, `torch.compile`, BF16 autocast, and optimizer steps. It reports parameter counts, step time, throughput, and peak allocated GPU memory. Its default sequence length is 16,384; reduce `T` in `bench.py` if needed.
 
-Default config targets a 3090/4090 with compile + gradient checkpointing. At `B=1, T=16384` it should fit comfortably in 24 GB.
+This is a performance probe, not a language-model quality evaluation. FLOP/MFU and token-budget projections are approximate; active-parameter counts are not interchangeable with total parameters or exact compute.
 
-### Config
+There is no complete V4 training or generation command yet.
 
-Edit `v3/config.py`:
+## Earlier checkpoint
 
-| Field | Default | Notes |
-|---|---|---|
-| `d_model` | 640 | Hidden dimension |
-| `layers` | 12 | Total attention+FFN pairs |
-| `mix_ratio` | 4 | MLA every N layers (3:1 KDA:MLA) |
-| `d_latent` | 320 | Latent space for routed experts (0.5× d_model) |
-| `d_expert` | 512 | Expert hidden width |
-| `d_shared` | 1024 | Shared expert hidden width |
-| `n_experts` | 16 | Routed expert pool |
-| `top_k` | 2 | Experts active per token |
-| `vocab_size` | 16000 | Tied embeddings |
-| `use_ckpt` | True | Gradient checkpointing (trades compute for memory) |
+An earlier model is available at [gav6/mini-k3-125m-sft](https://huggingface.co/gav6/mini-k3-125m-sft).
 
----
+The model card reports 125.9M total / 63.3M active parameters, 2.39B pretraining tokens, and subsequent instruction tuning. It uses its own generation code rather than the standard Transformers loading interface.
 
-## What's Implemented vs Planned
+That checkpoint is a research artifact. It can produce fluent text, but instruction following, factual accuracy, repetition, and longer responses remain weak. Improving those behaviors is a central motivation for V4. The checkpoint's results should not be presented as results for the unfinished V4 model.
 
-| Component | Status |
-|---|---|
-| KDA (FLA `chunk_kda`, lower-bounded decay, full-rank sigmoid gate) | ✅ |
-| Gated MLA (NoPE, full-rank sigmoid gate) | ✅ |
-| Block AttnRes (per-module pseudo-queries, partial sums, final aggregation) | ✅ |
-| Stable LatentMoE (latent routing, SiTU-GLU, normalized aggregate, shared expert) | ✅ |
-| Dense first layer | ✅ |
-| Sign-based load balancing | ✅ |
-| Quantile Balancing (Eq. 14, exact `torch.quantile` version) | 🔄 Planned |
-| 2nd shared expert per layer (K3 uses Ns=2) | 🔄 Under consideration |
-| MTP layer | ❌ Skipped (inference only; small model) |
-| Vision backbone (MoonViT-V2) | ❌ Skipped (text-only for now) |
-| Per-Head Muon optimizer | 🔄 Next up |
-| Weight clipping (K2-style) | 🔄 With Muon |
-| Cosine LR, 1% warmup, wd=0.1 | 🔄 With Muon |
-| Real data training loop | 🔄 Pending |
+## Next steps
 
-### Why skip the 2nd shared expert?
+- [ ] Assemble the V4 backbone, FFNs, and language-model head.
+- [ ] Integrate and test model-wide recurrent, convolution, and latent caches.
+- [ ] Verify causal behavior and full-sequence versus cached-decoding agreement.
+- [ ] Build reproducible data preparation, training, validation, and checkpoint resume paths.
+- [ ] Benchmark candidate widths and depths on the RTX 3090.
+- [ ] Run short pilots before committing to a full token budget.
+- [ ] Compare dense FFNs with MoE at matched total parameters and measured training time.
+- [ ] Evaluate instruction following, copying, summarization, repetition, and stopping behavior.
 
-K3 uses 2 full-width shared experts per layer; we currently have 1. At our scale (12 layers, 8× sparsity) the routed experts are already well-trained (12.5% token coverage each), and a 2nd shared expert would add ~22M active params (+31% FLOPs) for unproven benefit on a single GPU. We're keeping it as a clean future A/B experiment.
-
-### Why module-granularity AttnRes?
-
-K3 applies AttnRes at the layer-pair level (mixer+FFN as one unit) with ~8 blocks of 12 layers. At L=12, strict layer-granularity would collapse to 1–2 blocks, losing the block structure entirely. Module-granularity gives us 4 blocks of 3 layers, which preserves the inter/intra-block dynamics at small depth.
-
----
-
-## Hardware Target
-
-- **Primary:** RTX 3090 (24 GB) or RTX 4090 (24 GB)
-- **Precision:** `torch.bfloat16` autocast, compiled (`torch.compile`), gradient checkpointing
-- **Expected throughput:** depends on sequence length; bench.py will report your actual tok/s and MFU
-
----
+AttnRes, alternative expert activations, and more elaborate routing remain experimental choices for V4 rather than prerequisites for a strong baseline.
 
 ## References
 
-- Kimi K3: Open Frontier Intelligence — Moonshot AI technical report, arXiv:2607.24653v1 (July 2026)
-- Kimi Linear: An Expressive, Efficient Attention Architecture — arXiv 2510.26692
-- flash-linear-attention — [`github.com/fla-org/flash-linear-attention`](https://github.com/fla-org/flash-linear-attention)
-- Muon — [kellerjordan.github.io/posts/muon/](https://kellerjordan.github.io/posts/muon/)
+- [Kimi Linear: An Expressive, Efficient Attention Architecture](https://arxiv.org/abs/2510.26692)
+- [flash-linear-attention](https://github.com/fla-org/flash-linear-attention)
+- [MobileLLM: Optimizing Sub-billion Parameter Language Models for On-Device Applications](https://arxiv.org/abs/2402.14905)
+- [SmolLM2: When Smol Goes Big — Data-Centric Training of a Small Language Model](https://arxiv.org/abs/2502.02737)
+- [V4 source notes](v4/sources.md)
+
+Built by [Gavin McLaughlan](https://github.com/gavmc).
