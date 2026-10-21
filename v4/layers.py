@@ -179,8 +179,23 @@ class MLA(nn.Module):
 
 
 class MoE(nn.Module):
-    def __init__(self):
+    def __init__(self, d_model, d_latent, experts, n_sparse, n_shared):
         super().__init__()
+
+        self.shared = nn.ModuleList([])
+
+
+class FFN(nn.Module):
+    def __init__(self, d_model, d_hidden):
+        super().__init__()
+
+        self.l1 = nn.Linear(d_model, d_hidden, bias=False)
+        self.l2 = nn.Linear(d_hidden, d_model, bias=False)
+
+    def forward(self, x):
+        x = F.silu(self.l1(x))
+        x = F.silu(self.l2(x))
+        return x
 
 
 
