@@ -26,12 +26,22 @@ class DataTypes(BaseModel):
     compute: str = "fp32"
 
 
-class ModelConfig(BaseModel):
-    vocab_size: int = 16_000
-    v_dim: int = 128
-    k_dim: int = 64
-
-
 
 dtypes = DataTypes()
-model_config = ModelConfig()
+
+
+class Config(BaseModel):
+    layers: int = 24
+    d_model: int = 576
+    heads: int = 9
+    d_ffn: int = 2304
+    dv: int = 64
+    dk: int = 64
+
+    vocab_size: int = 32_000
+    g_min: int = -5
+    dc: int = 144
+    d_head: int = d_model // heads
+
+
+config = Config()

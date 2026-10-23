@@ -179,23 +179,75 @@ class MLA(nn.Module):
 
 
 class MoE(nn.Module):
-    def __init__(self, d_model, d_latent, experts, n_sparse, n_shared):
+    def __init__(self):
         super().__init__()
+        pass
 
-        self.shared = nn.ModuleList([])
+    def forward():
+        pass
 
 
 class FFN(nn.Module):
     def __init__(self, d_model, d_hidden):
         super().__init__()
-
-        self.l1 = nn.Linear(d_model, d_hidden, bias=False)
-        self.l2 = nn.Linear(d_hidden, d_model, bias=False)
+        self.gate = nn.Linear(d_model, d_hidden, bias=False)
+        self.up = nn.Linear(d_model, d_hidden, bias=False)
+        self.down = nn.Linear(d_hidden, d_model, bias=False)
 
     def forward(self, x):
-        x = F.silu(self.l1(x))
-        x = F.silu(self.l2(x))
-        return x
+        return self.down(F.silu(self.gate(x)) * self.up(x))
 
 
+
+class Block(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+
+        self.attns = nn.ModuleList([
+            KDA(cfg.d_model, cfg.dk, cfg.dv, cfg.heads, cfg.g_min),
+            KDA(cfg.d_model, cfg.dk, cfg.dv, cfg.heads, cfg.g_min),
+            KDA(cfg.d_model, cfg.dk, cfg.dv, cfg.heads, cfg.g_min),
+            MLA(cfg.d_model, cfg.dc, cfg.heads, cfg.d_head),
+        ])
+
+        self.ffns = nn.ModuleList([FFN(cfg.d_model, cfg.d_ffn) for _ in range(4)])
+
+        self.attn_norms = nn.ModuleList([nn.RMSNorm(cfg.d_model) for _ in range(4)])
+
+        self.ffn_norms = nn.ModuleList([nn.RMSNorm(cfg.d_model) for _ in range(4)])
+
+    def forward(self, x, cache=None, use_cache=False):
+ 
+        if cache is None:
+            cache = [None, None, None, None]
+
+        new_cache = []
+
+        for i in range(4):
+            attn_input = self.attn_norms[i](x)
+
+            if i < 3:
+                state, conv_state = cache[i] if cache[i] is not None else (None, None)
+
+                mixed, state, conv_state = self.attns[i](
+                    attn_input,
+                    initial_state=state,
+                    conv_state=conv_state,
+                    use_cache=use_cache,
+                )
+
+                new_cache.append((state, conv_state) if use_cache else None)
+            else:
+                mixed, latent_cache = self.attns[i](
+                    attn_input,
+                    latent_cache=cache[i],
+                    use_cache=use_cache,
+                )
+
+                new_cache.append(latent_cache)
+
+            x = x + mixed
+            x = x + self.ffns[i](self.ffn_norms[i](x))
+
+        return x, new_cache if use_cache else None
 
