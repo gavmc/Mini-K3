@@ -1,12 +1,12 @@
 from torch import nn
 import torch
 
-from config import config as cfg
+from config import Config
 from layers import Block
 
 
 class MiniK3(nn.Module):
-    def __init__(self):
+    def __init__(self, cfg: Config):
         super().__init__()
 
         self.embedding = nn.Embedding(cfg.vocab_size, cfg.d_model)

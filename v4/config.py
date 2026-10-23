@@ -43,5 +43,3 @@ class Config(BaseModel):
     dc: int = 144
     d_head: int = d_model // heads
 
-
-config = Config()
