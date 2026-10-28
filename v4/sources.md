@@ -6,3 +6,5 @@ https://arxiv.org/abs/2510.26692 <- Kimi Linear
 https://github.com/fla-org/flash-linear-attention <- FLA
 https://arxiv.org/abs/2402.14905 <- MobileLLM
 https://arxiv.org/abs/2502.02737 <- SmolLM2
+
+https://arxiv.org/html/2502.16982v1 <- Muon
