@@ -1,5 +1,9 @@
 import torch
+import torch.nn as nn
+from torch.optim import Muon, AdamW
 
+from config import OptimConfig
+from model import MiniK3
 
 def newton_schulz(G: torch.Tensor, steps=5, eps=1e-7):
 
@@ -32,7 +36,6 @@ def newton_schulz(G: torch.Tensor, steps=5, eps=1e-7):
 
     return X.to(G.dtype)
 
-
 def muon_update(grad, momentum, beta=0.95, steps=5, nesterov=True):
     momentum.mul_(beta).add_(grad, alpha=1-beta)
 
@@ -57,9 +60,8 @@ def muon_update(grad, momentum, beta=0.95, steps=5, nesterov=True):
         update = update.view(shape)
 
     return update
-    
 
-class Muon(torch.optim.Optimizer):
+class CustomMuon(torch.optim.Optimizer):
     def __init__(self, params, lr=1e-2, momentum=0.95, weight_decay=0, steps=5, nesterov=True):
 
         defaults = dict(lr=lr, momentum=momentum, weight_decay=weight_decay, steps=steps, nesterov=nesterov)
@@ -111,5 +113,28 @@ class Muon(torch.optim.Optimizer):
 
         return loss
 
+# ^ need to update to a per-head muon if I end up using it later
 
 
+def init_optim(model: MiniK3, cfg: OptimConfig):
+    adam_params = set()
+    muon_params = set()
+
+    for mname, m in model.named_modules():
+        for p in m.parameters(recurse=False):
+            if isinstance(m, nn.Embedding):
+                adam_params.add(p)
+            elif isinstance(m, nn.Conv1d):
+                adam_params.add(p)
+            elif p.ndim < 2:
+                adam_params.add(p)
+            elif mname == "output":
+                adam_params.add(p)
+            else:
+                muon_params.add(p)
+
+
+    muon_optim = Muon(muon_params, lr=cfg.muon_lr, weight_decay=cfg.muon_weight_decay, momentum=cfg.muon_momentum)
+    adam_optim = AdamW(adam_params, lr=cfg.adam_lr, betas=cfg.adam_betas, weight_decay=cfg.adam_weight_decay)
+
+    return muon_optim, adam_optim

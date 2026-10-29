@@ -1,33 +1,4 @@
-from pydantic import BaseModel, ConfigDict
-import triton.language as tl
-import torch
-
-
-tl_map = {
-    "fp16": tl.float16,
-    "fp32": tl.float32,
-    "bf16": tl.bfloat16,
-}
-
-torch_map = {
-    "fp16": torch.float16,
-    "fp32": torch.float32,
-    "bf16": torch.bfloat16,
-}
-
-class DataTypes(BaseModel):
-    q: str = "bf16"
-    k: str = "bf16"
-    v: str = "bf16"
-    g: str = "fp32"
-    beta: str = "fp32"
-    state: str = "fp32"
-    output: str = "bf16"
-    compute: str = "fp32"
-
-
-
-dtypes = DataTypes()
+from pydantic import BaseModel
 
 
 class Config(BaseModel):
@@ -43,3 +14,15 @@ class Config(BaseModel):
     dc: int = 144
     d_head: int = d_model // heads
 
+
+
+class OptimConfig(BaseModel):
+    muon_lr: float = 0.001
+    muon_momentum: float = 0.95
+    muon_weight_decay: float = 0
+
+    adam_lr: float = 0.001
+    adam_betas: tuple = (0.9, 0.95)
+    adam_weight_decay: float = 0
+
+    grad_clip: float = 1.0
