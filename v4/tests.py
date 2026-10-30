@@ -1,33 +1,22 @@
 from model import MiniK3
 
-from config import Config
+from config import Config, OptimConfig, SchedulerConfig
+from optim import init_optim
+from scheduler import WSDScheduler
 
 from torch.optim import Muon, AdamW
 import torch.nn as nn
 
-cfg = Config()
-model = MiniK3(cfg)
+model_cfg = Config()
+optim_cfg = OptimConfig()
+sched_cfg = SchedulerConfig()
+
+model = MiniK3(model_cfg)
 
 
-adam_params = set()
-muon_params = set()
-
-for mname, m in model.named_modules():
-    for pname, p in m.named_parameters(recurse=False):
-        if isinstance(m, nn.Embedding):
-            adam_params.add(p)
-        elif isinstance(m, nn.Conv1d):
-            adam_params.add(p)
-        elif p.ndim < 2:
-            adam_params.add(p)
-        elif mname == "output":
-            adam_params.add(p)
-        else:
-            muon_params.add(p)
+muon_optim, adam_optim = init_optim(model, optim_cfg)
 
 
-muon_optim = Muon(muon_params)
-adam_optim = AdamW(adam_params)
+muon_sched = WSDScheduler(muon_optim, sched_cfg)
+adam_sched = WSDScheduler(adam_optim, sched_cfg)
 
-
-        

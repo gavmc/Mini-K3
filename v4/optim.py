@@ -129,12 +129,12 @@ def init_optim(model: MiniK3, cfg: OptimConfig):
             elif p.ndim < 2:
                 adam_params.add(p)
             elif mname == "output":
-                adam_params.add(p)
+                adam_params.add(p) # <- shares weights with embedding layer
             else:
                 muon_params.add(p)
 
 
-    muon_optim = Muon(muon_params, lr=cfg.muon_lr, weight_decay=cfg.muon_weight_decay, momentum=cfg.muon_momentum)
-    adam_optim = AdamW(adam_params, lr=cfg.adam_lr, betas=cfg.adam_betas, weight_decay=cfg.adam_weight_decay)
+    muon_optim = Muon(list(muon_params), lr=cfg.muon_lr, weight_decay=cfg.muon_weight_decay, momentum=cfg.muon_momentum)
+    adam_optim = AdamW(list(adam_params), lr=cfg.adam_lr, betas=cfg.adam_betas, weight_decay=cfg.adam_weight_decay)
 
     return muon_optim, adam_optim

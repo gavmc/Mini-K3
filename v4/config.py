@@ -26,3 +26,10 @@ class OptimConfig(BaseModel):
     adam_weight_decay: float = 0
 
     grad_clip: float = 1.0
+
+
+class SchedulerConfig(BaseModel):
+    base_lr: float = 0.005
+    warmup: int = 1000
+    cooldown: int = 1000
+    total: int = 3000
