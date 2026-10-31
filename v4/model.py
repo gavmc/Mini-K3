@@ -28,7 +28,7 @@ class MiniK3(nn.Module):
             if isinstance(module, (nn.Linear, nn.Embedding)):
                 nn.init.normal_(module.weight, mean=0.0, std=init_std)
 
-                if isinstance(module, nn.Linear):
+                if isinstance(module, nn.Linear) and module.bias is not None:
                     nn.init.zeros_(module.bias)
 
             elif isinstance(module, nn.RMSNorm):
