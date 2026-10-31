@@ -1,11 +1,11 @@
 import math
 
-from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim.lr_scheduler import LRScheduler
 
 from config import SchedulerConfig
 
 
-class WSDScheduler(_LRScheduler):
+class WSDScheduler(LRScheduler):
     def __init__(self, optimizer, cfg: SchedulerConfig, last_epoch=-1):
         self.base_lr = cfg.base_lr
         self.warmup = cfg.warmup
