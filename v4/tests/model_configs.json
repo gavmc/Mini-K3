@@ -1,0 +1,82 @@
+{
+  "D150_A": {
+    "layers": 28,
+    "d_model": 512,
+    "heads": 8,
+    "d_head": 64,
+    "dk": 64,
+    "dv": 64,
+    "d_ffn": 2304,
+    "dc": 128
+  },
+  "D150_B": {
+    "layers": 24,
+    "d_model": 576,
+    "heads": 9,
+    "d_head": 64,
+    "dk": 64,
+    "dv": 64,
+    "d_ffn": 2304,
+    "dc": 144
+  },
+  "D150_C": {
+    "layers": 20,
+    "d_model": 640,
+    "heads": 10,
+    "d_head": 64,
+    "dk": 64,
+    "dv": 64,
+    "d_ffn": 2560,
+    "dc": 160
+  },
+  "D300_A": {
+    "layers": 40,
+    "d_model": 640,
+    "heads": 10,
+    "d_head": 64,
+    "dk": 64,
+    "dv": 64,
+    "d_ffn": 2560,
+    "dc": 160
+  },
+  "D300_B": {
+    "layers": 28,
+    "d_model": 768,
+    "heads": 12,
+    "d_head": 64,
+    "dk": 64,
+    "dv": 64,
+    "d_ffn": 3072,
+    "dc": 192
+  },
+  "D300_C": {
+    "layers": 20,
+    "d_model": 896,
+    "heads": 14,
+    "d_head": 64,
+    "dk": 64,
+    "dv": 64,
+    "d_ffn": 3584,
+    "dc": 224
+  },
+  "D500_A": {
+    "layers": 36,
+    "d_model": 896,
+    "heads": 14,
+    "d_head": 64,
+    "dk": 64,
+    "dv": 64,
+    "d_ffn": 3584,
+    "dc": 224
+  },
+  "D500_B": {
+    "layers": 28,
+    "d_model": 1024,
+    "heads": 16,
+    "d_head": 64,
+    "dk": 64,
+    "dv": 64,
+    "d_ffn": 4096,
+    "dc": 256
+  }
+}

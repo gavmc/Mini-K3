@@ -128,7 +128,7 @@ def init_optim(model: MiniK3, cfg: OptimConfig):
             elif isinstance(m, nn.Conv1d):
                 adam_params.append(p)
             elif p.ndim < 2:
-                if hasattr(p, "_no_weight_decay"):
+                if hasattr(p, "_no_weight_decay") and p._no_weight_decay == True:
                     adam_params_no_decay.append(p)
                 else:
                     adam_params.append(p)
