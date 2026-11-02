@@ -25,8 +25,9 @@ class MiniK3(nn.Module):
         initialized = set()
 
         for module in self.modules():
-            if isinstance(module, (nn.Linear, nn.Embedding)):
+            if isinstance(module, (nn.Linear, nn.Embedding)) and id(module.weight) not in initialized:
                 nn.init.normal_(module.weight, mean=0.0, std=init_std)
+                initialized.add(id(module.weight))
 
                 if isinstance(module, nn.Linear) and module.bias is not None:
                     nn.init.zeros_(module.bias)
