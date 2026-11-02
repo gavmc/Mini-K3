@@ -1,0 +1,44 @@
+{
+  "os":  "Windows-11-10.0.26200-SP0",
+  "python":  "CPython 3.12.4",
+  "startedAt":  "2026-11-02T19:22:39.899914Z",
+  "program":  "C:\\Users\\gavmc\\Documents\\Python Projects\\Mini-K3\\v4\\tests.py",
+  "codePath":  "v4\\tests.py",
+  "codePathLocal":  "tests.py",
+  "git":  {
+    "remote":  "https://github.com/gavmc/Mini-K3.git",
+    "commit":  "73604eb43c5f5b6dcc6d4d63e3d47f1ee69cf773"
+  },
+  "email":  "gavmclaughlan@gmail.com",
+  "root":  "C:\\Users\\gavmc\\Documents\\Python Projects\\Mini-K3\\v4",
+  "host":  "gavin-laptop",
+  "executable":  "C:\\Users\\gavmc\\Documents\\Python Projects\\Mini-K3\\v4\\.venv\\Scripts\\python.exe",
+  "cpu_count":  16,
+  "cpu_count_logical":  22,
+  "gpu":  "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "994147561472",
+      "used":  "412894019584"
+    }
+  },
+  "memory":  {
+    "total":  "33777467392"
+  },
+  "cpu":  {
+    "model":  "Intel(R) Core(TM) Ultra 9 185H"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 4060 Laptop GPU",
+      "memoryTotal":  "8585740288",
+      "cudaCores":  3072,
+      "architecture":  "Ada",
+      "uuid":  "GPU-1bb825b5-fc2a-d199-ff1d-611419b5585b",
+      "pciBusId":  "00000000:01:00.0"
+    }
+  ],
+  "cudaVersion":  "13.4",
+  "writerId":  "01a19db6-b7bd-7ca6-b912-0216737edb55"
+}
