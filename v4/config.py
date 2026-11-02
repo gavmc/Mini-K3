@@ -17,7 +17,7 @@ class Config(BaseModel):
 
 
 class OptimConfig(BaseModel):
-    muon_lr: float = 0.001
+    muon_lr: float = 0.01
     muon_momentum: float = 0.95
     muon_weight_decay: float = 0
 

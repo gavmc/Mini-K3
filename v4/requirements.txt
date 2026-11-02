@@ -1,3 +1,4 @@
+# Install separately first.
 torch==2.13.0
 triton-windows==3.7.1.post27; sys_platform == "win32"
 
@@ -12,3 +13,4 @@ tokenizers==0.23.3
 
 numpy==2.5.4
 tqdm==4.70.1
+wandb==0.31.0

@@ -5,10 +5,12 @@ from fla.modules.fused_linear_cross_entropy import fused_linear_cross_entropy_lo
 
 from config import Config
 from layers import Block
+from util import check_config
 
 class MiniK3(nn.Module):
     def __init__(self, cfg: Config):
         super().__init__()
+        check_config(cfg)
 
         self.embedding = nn.Embedding(cfg.vocab_size, cfg.d_model)
 
@@ -26,6 +28,7 @@ class MiniK3(nn.Module):
 
         for module in self.modules():
             if isinstance(module, (nn.Linear, nn.Embedding)) and id(module.weight) not in initialized:
+                initialized.add(id(module.weight))
                 nn.init.normal_(module.weight, mean=0.0, std=init_std)
                 initialized.add(id(module.weight))
 

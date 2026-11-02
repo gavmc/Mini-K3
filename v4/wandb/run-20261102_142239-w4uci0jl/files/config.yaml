@@ -1,0 +1,65 @@
+_wandb:
+    value:
+        cli_version: 0.31.0
+        e:
+            01a19db6-b7bd-7ca6-b912-0216737edb55:
+                codePath: v4\tests.py
+                codePathLocal: tests.py
+                cpu:
+                    model: Intel(R) Core(TM) Ultra 9 185H
+                cpu_count: 16
+                cpu_count_logical: 22
+                cudaVersion: "13.4"
+                disk:
+                    /:
+                        total: "994147561472"
+                        used: "412894019584"
+                email: gavmclaughlan@gmail.com
+                executable: C:\Users\gavmc\Documents\Python Projects\Mini-K3\v4\.venv\Scripts\python.exe
+                git:
+                    commit: 73604eb43c5f5b6dcc6d4d63e3d47f1ee69cf773
+                    remote: https://github.com/gavmc/Mini-K3.git
+                gpu: NVIDIA GeForce RTX 4060 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      cudaCores: 3072
+                      memoryTotal: "8585740288"
+                      name: NVIDIA GeForce RTX 4060 Laptop GPU
+                      pciBusId: "00000000:01:00.0"
+                      uuid: GPU-1bb825b5-fc2a-d199-ff1d-611419b5585b
+                host: gavin-laptop
+                memory:
+                    total: "33777467392"
+                os: Windows-11-10.0.26200-SP0
+                program: C:\Users\gavmc\Documents\Python Projects\Mini-K3\v4\tests.py
+                python: CPython 3.12.4
+                root: C:\Users\gavmc\Documents\Python Projects\Mini-K3\v4
+                startedAt: "2026-11-02T19:22:39.899914Z"
+                writerId: 01a19db6-b7bd-7ca6-b912-0216737edb55
+        m: []
+        python_version: 3.12.4
+        t:
+            "1":
+                - 1
+                - 11
+                - 49
+            "2":
+                - 1
+                - 11
+                - 49
+            "3":
+                - 1
+                - 2
+                - 16
+            "4": 3.12.4
+            "5": 0.31.0
+            "6": 5.19.0
+            "8":
+                - 3
+            "12": 0.31.0
+            "13": windows-amd64
+epochs:
+    value: 50
+learning_rate:
+    value: 0.005
