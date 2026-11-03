@@ -12,9 +12,9 @@ configs = json.loads(Path(__file__).with_name("model_configs.json").read_text())
 
 warmup = 5
 seq_len = 2048
-epochs = 50
-batch_sizes = [1, 2, 4, 8]
-runs = ["D150_B", "D300_B"]
+measure_steps = 50
+batch_sizes = [10]
+runs = ["D150_C"]
 
 optim_cfg = OptimConfig()
 muon_sched_cfg = SchedulerConfig(base_lr=optim_cfg.muon_lr, warmup=0, cooldown=0)
@@ -24,9 +24,12 @@ def benchmark(run, batch_size):
     model_cfg = Config.model_validate(configs[run])
 
     model = MiniK3(model_cfg).to("cuda")
+    total_params = sum(p.numel() for p in model.parameters())
     model.train()
 
     muon_optim, adam_optim = init_optim(model, optim_cfg)
+    model.compile()
+    
     muon_sched = WSDScheduler(muon_optim, muon_sched_cfg)
     adam_sched = WSDScheduler(adam_optim, adam_sched_cfg)
 
@@ -54,6 +57,9 @@ def benchmark(run, batch_size):
         muon_sched.step()
         adam_sched.step()
 
+    if not torch.isfinite(loss.detach()).item():
+        raise RuntimeError(f"Non-finite warmup loss: {run}, batch_size={batch_size}")
+
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
@@ -61,7 +67,7 @@ def benchmark(run, batch_size):
     torch.cuda.reset_peak_memory_stats()
     start.record()
 
-    for _ in range(epochs):
+    for _ in range(measure_steps):
         muon_optim.zero_grad(set_to_none=True)
         adam_optim.zero_grad(set_to_none=True)
     
@@ -80,29 +86,29 @@ def benchmark(run, batch_size):
     end.record()
     torch.cuda.synchronize()
 
+    if not torch.isfinite(loss.detach()).item():
+        raise RuntimeError(f"Non-finite measured loss: {run}, batch_size={batch_size}")
+
     peak_allocated = torch.cuda.max_memory_allocated() / 1024**3
     peak_reserved = torch.cuda.max_memory_reserved() / 1024**3
 
-    print(f"Peak allocated: {peak_allocated:.2f} GiB")
-    print(f"Peak reserved: {peak_reserved:.2f} GiB")
-
     elapsed_seconds = start.elapsed_time(end) / 1000
-    tokens_processed = batch_size * seq_len * epochs
+    tokens_processed = batch_size * seq_len * measure_steps
 
-    return tokens_processed / elapsed_seconds, peak_allocated, peak_reserved
+    return tokens_processed / elapsed_seconds, peak_allocated, peak_reserved, total_params
 
 
-f = open(Path(__file__).with_name("throughput.md"), "w")
+f = open(Path(__file__).with_name("throughput.md"), "a")
 
 for run in runs:
     for batch_size in batch_sizes:
         try:
-            tok_s, peak_allocated, peak_reserved = benchmark(run, batch_size)
+            tok_s, peak_allocated, peak_reserved, total_params = benchmark(run, batch_size)
 
-            print(f"Model: {run}  Batch Size: {batch_size}  Tok/s: {tok_s:.1f}")
-            print(f"Peak Memory Allocated: {peak_allocated:.2f}  Reserved: {peak_reserved:.2f}")
-            f.write(f"Model: {run}  Batch Size: {batch_size}  Tok/s: {tok_s:.1f}\n")
-            f.write(f"Peak Memory Allocated: {peak_allocated:.2f}  Reserved: {peak_reserved:.2f}\n")
+            print(f"Model: {run}  Parameters: {total_params:,}  Batch Size: {batch_size}  Tok/s: {tok_s:.1f}")
+            print(f"Peak Memory Allocated: {peak_allocated:.2f} GiB  Reserved: {peak_reserved:.2f} GiB")
+            f.write(f"Model: {run}  Parameters: {total_params:,}  Batch Size: {batch_size}  Tok/s: {tok_s:.1f}\n")
+            f.write(f"Peak Memory Allocated: {peak_allocated:.2f} GiB  Reserved: {peak_reserved:.2f} GiB\n")
             f.flush()
         except torch.cuda.OutOfMemoryError:
             print(f"OOM: model={run}, batch_size={batch_size}")
