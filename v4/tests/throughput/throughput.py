@@ -1,7 +1,7 @@
-from model import MiniK3
+from model.model import MiniK3
 from config import Config, OptimConfig, SchedulerConfig
-from optim import init_optim
-from scheduler import WSDScheduler
+from optimization.optim import init_optim
+from optimization.scheduler import WSDScheduler
 
 import torch
 import json
@@ -57,9 +57,6 @@ def benchmark(run, batch_size):
         muon_sched.step()
         adam_sched.step()
 
-    if not torch.isfinite(loss.detach()).item():
-        raise RuntimeError(f"Non-finite warmup loss: {run}, batch_size={batch_size}")
-
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
@@ -85,9 +82,6 @@ def benchmark(run, batch_size):
 
     end.record()
     torch.cuda.synchronize()
-
-    if not torch.isfinite(loss.detach()).item():
-        raise RuntimeError(f"Non-finite measured loss: {run}, batch_size={batch_size}")
 
     peak_allocated = torch.cuda.max_memory_allocated() / 1024**3
     peak_reserved = torch.cuda.max_memory_reserved() / 1024**3

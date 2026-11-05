@@ -4,7 +4,7 @@ import math
 from fla.modules.fused_linear_cross_entropy import fused_linear_cross_entropy_loss
 
 from config import Config
-from layers import Block
+from model.layers import Block
 from util import check_config
 
 class MiniK3(nn.Module):

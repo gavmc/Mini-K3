@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.optim import Muon, AdamW
 
 from config import OptimConfig
-from model import MiniK3
+from model.model import MiniK3
 
 def newton_schulz(G: torch.Tensor, steps=5, eps=1e-7):
 
