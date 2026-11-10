@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import gc
 
-configs = json.loads(Path(__file__).with_name("model_configs.json").read_text())
+configs = json.loads(Path(__file__).parent.with_name("model_configs.json").read_text())
 
 warmup = 5
 seq_len = 2048
