@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from dotenv import load_dotenv
 from pathlib import Path
+import argparse
 
 from config import DataConfig
 
@@ -122,7 +123,10 @@ def write_data(name, gen, cfg: DataConfig):
     return path
 
 
-def build(cfg: DataConfig):
+SOURCES = ["fineweb-edu", "cosmopedia-v2", "stack-edu-Python"]
+
+
+def build(cfg: DataConfig, sources=SOURCES):
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
 
     jobs = [
@@ -132,14 +136,36 @@ def build(cfg: DataConfig):
     ]
 
     for name, gen in jobs:
-        write_data(name, gen, cfg)
+        if name in sources:
+            write_data(name, gen, cfg)
 
 
-    
+def parse_args():
+    defaults = DataConfig()
+
+    parser = argparse.ArgumentParser(description="Download the pretraining sample, one parquet file per source.")
+    parser.add_argument("--total-tokens", type=int, default=defaults.total_tokens,
+                        help="token budget across all sources, split 70/15/15 (proxy counts, not our tokenizer)")
+    parser.add_argument("--out-dir", type=Path, default=defaults.out_dir)
+    parser.add_argument("--buffer-size", type=int, default=defaults.buffer_size, help="streaming shuffle buffer, in documents")
+    parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument("--num-threads", type=int, default=defaults.num_threads, help="threads for stack-edu S3 downloads")
+    parser.add_argument("--sources", nargs="+", choices=SOURCES, default=SOURCES,
+                        help="only download these sources, e.g. to redo stack-edu after a failure")
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
-    cfg = DataConfig(total_tokens=100_000_000, buffer_size=100_000, out_dir=Path("data/sample-100M"))
-    build(cfg)
+    args = parse_args()
+
+    cfg = DataConfig(
+        total_tokens=args.total_tokens,
+        out_dir=args.out_dir,
+        buffer_size=args.buffer_size,
+        seed=args.seed,
+        num_threads=args.num_threads,
+    )
+    build(cfg, args.sources)
 
 
 
