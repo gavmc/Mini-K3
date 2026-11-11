@@ -183,7 +183,7 @@ class MoE(nn.Module):
         super().__init__()
         pass
 
-    def forward():
+    def forward(self):
         pass
 
 

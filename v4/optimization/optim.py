@@ -13,9 +13,6 @@ def newton_schulz(G: torch.Tensor, steps=5, eps=1e-7):
         B = b * A + c * torch.matmul(A, A)
         return a * X + torch.matmul(B, X)
 
-    device = G.device
-    dtype = G.dtype
-
     G = G.contiguous()
     X = G.to(torch.bfloat16)
 
@@ -129,6 +126,8 @@ def init_optim(model: MiniK3, cfg: OptimConfig):
                 adam_params.append(p)
             elif p.ndim < 2:
                 if hasattr(p, "_no_weight_decay") and p._no_weight_decay == True:
+                    adam_params_no_decay.append(p)
+                elif isinstance(m, nn.RMSNorm):
                     adam_params_no_decay.append(p)
                 else:
                     adam_params.append(p)

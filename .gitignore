@@ -16,3 +16,7 @@ build/
 
 .env
 AGENTS.md
+PROJECT_LOG.md
+
+wandb/
+sample/

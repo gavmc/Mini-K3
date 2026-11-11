@@ -28,7 +28,6 @@ class MiniK3(nn.Module):
 
         for module in self.modules():
             if isinstance(module, (nn.Linear, nn.Embedding)) and id(module.weight) not in initialized:
-                initialized.add(id(module.weight))
                 nn.init.normal_(module.weight, mean=0.0, std=init_std)
                 initialized.add(id(module.weight))
 

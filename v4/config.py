@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-
+from pathlib import Path
 
 class Config(BaseModel):
     layers: int = 24
@@ -19,7 +19,7 @@ class Config(BaseModel):
 class OptimConfig(BaseModel):
     muon_lr: float = 0.01
     muon_momentum: float = 0.95
-    muon_weight_decay: float = 0
+    muon_weight_decay: float = 0.1
 
     adam_lr: float = 0.001
     adam_betas: tuple = (0.9, 0.95)
@@ -29,7 +29,24 @@ class OptimConfig(BaseModel):
 
 
 class SchedulerConfig(BaseModel):
-    base_lr: float = 0.005
+    base_lr: float  # needs to come from the optim config
     warmup: int = 1000
     cooldown: int = 1000
     total: int = 3000
+
+
+class DataConfig(BaseModel):
+    seed: int = 42
+    buffer_size: int = 100_000
+    split: tuple[float, float, float] = (0.70, 0.15, 0.15)
+    total_tokens: int = 100_000_000
+
+    bytes_per_token: float = 3.0
+    max_file_bytes: int = 128_000
+    min_int_score: int = 2
+    num_threads: int = 32
+    out_dir: Path = Path("sample")
+    s3_bucket: str = "softwareheritage"
+
+    def budget(self, i: int) -> int:
+        return int(self.total_tokens * self.split[i])
