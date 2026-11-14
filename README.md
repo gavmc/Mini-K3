@@ -2,164 +2,195 @@
 
 **Small language models built and trained from scratch on a single RTX 3090.**
 
-Mini-K3 is an independent PyTorch research project exploring Kimi-inspired architectures at consumer-GPU scale: Kimi Delta Attention (KDA), gated multi-head latent attention, mixture-of-experts FFNs, and attention residuals.
+Mini-K3 is an independent PyTorch research project exploring Kimi-inspired architectures on consumer hardware. V4 combines Kimi Delta Attention (KDA), gated multi-head latent attention (MLA), and dense SwiGLU FFNs. MoE and attention residuals are later experiments.
 
-The project has evolved from architectural reproduction toward a more practical question: **which of these ideas actually improve a small model under a limited training budget?** V4 is the current development effort. Earlier versions remain in the repository for reference.
+The practical question is which ideas improve a useful small model under a limited training budget. The target behaviors are instruction following, rewriting, short summarization, copying names and numbers, following list constraints, and clean stopping.
 
-> **Status:** V4 is under construction. Attention layers and experimental KDA kernels are present, but the full V4 language model and training pipeline are not yet complete. This is an educational research project, not an official Moonshot AI implementation or a production assistant.
+> **Status (2026-11-13):** The V4 model, Muon + AdamW optimizers, and WSD scheduler are implemented. Eight model configurations have been benchmarked, with three shortlisted. The pretraining sample has been downloaded and tokenized: 126.53M tokens stored as uint16, verified against every source document. The training loop, validation split, checkpoint/resume, evaluation, generation driver, and SFT remain to be built. No V4 language-quality result is available yet.
 
-## Goals
+This is an educational research project and an independent implementation, with no affiliation with Moonshot AI.
 
-- Train a useful small language model on one 24 GB GPU.
-- Improve instruction following, short-form generation, summarization, and rewriting over earlier checkpoints.
-- Compare model width, depth, and parameter count through controlled experiments.
-- Evaluate dense FFNs against small MoE configurations rather than assume MoE is better at this scale.
-- Use established kernels for model training while retaining custom Triton implementations for learning and correctness experiments.
+## Goals and scope
+
+- Train a useful small language model on one RTX 3090 with 24 GB VRAM.
+- Use a context length of 2,048 tokens.
+- Target approximately 20B pretraining tokens for the selected model; smaller pilots are additional unless explicitly budgeted otherwise.
+- Compare width and depth using measured throughput, memory, and learning results.
+- Establish a dense FFN baseline before experimenting with MoE or AttnRes.
+- Use FLA for training and keep custom Triton kernels as educational references.
+
+No final model configuration or training recipe has been selected.
 
 ## Versions
 
-| Version | Purpose | What is in the repository |
+| Version | Purpose | Contents |
 | --- | --- | --- |
 | [`v1/`](v1/) | Early MoE experiments | Expert training and merging code |
-| [`v2/`](v2/) | Earlier end-to-end Mini-K3 iteration | Model, data preparation, pretraining, SFT, sampling, optimizer code, and design notes |
-| [`v3/`](v3/) | FLA-based architecture prototype | Hybrid KDA/MLA model, latent MoE, AttnRes, configuration, and a synthetic training benchmark |
-| [`v4/`](v4/) | Current rebuild | Attention layers, dtype configuration, custom KDA experiments, and an unfinished model scaffold |
+| [`v2/`](v2/) | Earlier end-to-end iteration | Model, data preparation, pretraining, SFT, sampling, optimizers, and design notes |
+| [`v3/`](v3/) | FLA-based architecture prototype | Hybrid KDA/MLA model, latent MoE, AttnRes, configuration, and synthetic benchmark |
+| [`v4/`](v4/) | Current development | Dense KDA/MLA model, optimizers, scheduler, throughput benchmarks, tokenizer, and sample preparation |
 
 These versions are separate experiments. Their configurations, checkpoints, and entry points are not interchangeable.
 
 ## V4 architecture
 
+The model lives in [`v4/model/model.py`](v4/model/model.py), with layers in [`v4/model/layers.py`](v4/model/layers.py).
+
+Each block contains three KDA mixers followed by one MLA mixer. Every mixer has a dense SwiGLU FFN after it. Each mixer and FFN has its own pre-RMSNorm and additive residual. `cfg.layers` counts mixer+FFN pairs, so the model builds `layers // 4` blocks. A final RMSNorm precedes the output, and the 32,000-token embedding and output projection share weights.
+
 ### Kimi Delta Attention
 
-The KDA layer in [`v4/layers.py`](v4/layers.py) includes:
-
-- Separate query, key, and value projections.
-- Short causal convolutions on Q, K, and V.
-- Per-head update strengths and per-key-channel decay gates.
+- Separate Q/K/V projections followed by short causal convolutions with kernel size 4.
+- Per-head update strengths and per-key-channel decay gates computed in FP32.
 - Query/key L2 normalization inside the FLA kernel.
 - Per-head output RMSNorm and a learned sigmoid output gate.
-- Recurrent-state and convolution-state cache interfaces.
+- Explicit recurrent-state and convolution-state caches.
 
-The layer uses [flash-linear-attention](https://github.com/fla-org/flash-linear-attention): `chunk_kda` for training and multi-token processing, and `fused_recurrent_kda` for single-token evaluation with gradients disabled.
-
-Each KDA layer maintains its own recurrent state. During prefill it produces an output for every input token; during decoding it processes the new token using that layer's cached state.
+The training and prefill path uses [flash-linear-attention](https://github.com/fla-org/flash-linear-attention) `chunk_kda`. Single-token evaluation with gradients disabled uses `fused_recurrent_kda`.
 
 ### Gated latent attention
 
-The `MLA` layer compresses each token to a normalized latent representation, reconstructs per-head keys and values, and applies causal scaled dot-product attention. A learned sigmoid gate modulates the attention output before the output projection.
+MLA compresses each token to a shared normalized latent, reconstructs per-head keys and values, and applies causal scaled-dot-product attention followed by a sigmoid output gate. It uses no explicit positional encoding; positional information reaches it through the preceding KDA layers.
 
-It currently uses **no explicit positional encoding** and provides a latent-cache interface for incremental decoding, including an offset causal mask when extending a cache with multiple tokens.
+The cache stores latents. Keys and values for the full history are reconstructed on each call. Multi-token cache extensions use an offset causal mask.
 
-This is a straightforward latent-attention implementation: it reconstructs keys and values from the cached latents on each call. It does not yet implement an optimized weight-absorbed MLA decoding path.
+### Model interface
 
-### Backbone and FFNs
+```python
+loss = model(input_ids, targets=targets)
+logits, cache = model(input_ids, cache=cache, use_cache=True)
+```
 
-The V4 backbone is not assembled yet: `MiniK3.forward` is a placeholder and the V4 `MoE` class is a scaffold. Layer scheduling, residual connections, FFNs, embedding/head tying, and model-wide cache management still need to be integrated.
+With targets, the model returns a scalar fused linear cross-entropy loss with `ignore_index=-100`. Callers shift targets once: `input_ids = tokens[:, :-1]`, `targets = tokens[:, 1:]`.
 
-The initial experiment plan is to establish a dense-FFN hybrid baseline, then test MoE and additional architectural features separately. A 3:1 KDA-to-MLA schedule is a starting candidate, not a demonstrated optimum at this size.
+Caches are passed explicitly and are not stored on the model. FLA convolution caches may be mutated in place, so clone a cache before branching from a shared prefix. Causal behavior and full-sequence versus cached-decoding agreement still need recorded correctness checks.
 
-## Model-size experiments
+## Shortlisted models and measured throughput
 
-V4's final size is not fixed. The following are **proposed configurations**, not trained models or the current defaults in `v4/config.py`.
+All eight candidate configurations remain in [`v4/tests/model_configs.json`](v4/tests/model_configs.json). The current shortlist is **D150_B, D150_C, and D300_C**.
 
-| Candidate | Hidden width | Layers | Attention heads | SwiGLU intermediate width | Estimated total parameters |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Small baseline | 576 | 24 | 9 | 2,304 | ~153M |
-| Main candidate | 768 | 28 | 12 | 3,072 | ~302M |
-| Larger candidate | 896 | 36 | 14 | 3,584 | ~514M |
+Gavin's compiled desktop runs used synthetic tokens at context 2,048, BF16 autocast, optimizer steps, and one process per model/batch combination. The table shows the fastest tested batch for each shortlisted model, from [`throughput.md`](v4/tests/throughput/throughput.md).
 
-These estimates assume a 32K vocabulary, tied embeddings, 64-dimensional key/value heads, dense FFNs, and a 3:1 KDA/MLA schedule. Counts must be checked against the assembled models. Whether a configuration fits and trains efficiently depends on sequence length, batch size, checkpointing, and kernel behavior.
+| Candidate | Width | Mixer+FFN pairs | Heads | Parameters | Batch | Tokens/sec | Peak allocated GiB | Ideal 20B-token days |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| D150_B | 576 | 24 | 9 | 152,893,890 | 10 | 25,364.6 | 20.92 | 9.1 |
+| D150_C | 640 | 20 | 10 | 158,661,750 | 10 | 26,829.3 | 19.78 | 8.6 |
+| D300_C | 896 | 20 | 14 | 298,734,066 | 8 | 17,258.9 | 22.59 | 13.4 |
 
-The working target is approximately **20B pretraining tokens for the selected model**, after smaller pilot runs. Architecture and training budgets may change based on measured throughput and validation results.
+Both D150 models hit OOM at batch 12. D300_C at batch 8 leaves little headroom for a real trainer. Ideal days exclude data loading, evaluation, checkpointing, and downtime. These measurements establish speed and memory use; model quality has not been compared yet.
 
-## Custom KDA kernels
+## Optimizers and scheduler
 
-[`v4/kernels/`](v4/kernels/) contains the learning-oriented implementations:
+[`init_optim`](v4/optimization/optim.py) returns PyTorch Muon and AdamW. Muon receives most matrices; AdamW receives the tied embedding, convolution weights, and vectors. RMSNorm gains and tagged decay parameters have zero weight decay.
 
-| File | Contents |
-| --- | --- |
-| [`recurrent_kda.py`](v4/kernels/recurrent_kda.py) | PyTorch recurrent forward/backward references and Triton recurrent kernels |
-| [`chunkwise_kda.py`](v4/kernels/chunkwise_kda.py) | Experimental chunkwise work, including a PyTorch reference |
-| [`tests.py`](v4/kernels/tests.py) | Recurrent backward comparisons against PyTorch autograd |
+Current provisional defaults are Muon LR 0.01, momentum 0.95, weight decay 0.1; AdamW LR 0.001, betas (0.9, 0.95), weight decay 0; global gradient clipping at 1.0. These settings have not been tuned in learning pilots.
 
-The backward test constructs a real forward state history and checks gradients for Q, K, V, decay gates, update strengths, and the initial state. It tests both zero and nonzero final-state gradients.
+[`WSDScheduler`](v4/optimization/scheduler.py) implements linear warmup, a constant phase, and `1 - sqrt(progress)` cooldown to zero. Phase lengths count optimizer updates. Each optimizer needs its own scheduler with the corresponding `base_lr`. The benchmark uses no LR warmup; it does not establish a long-run recipe. Optimizer and scheduler resume has not been exercised.
 
-Storage and compute dtypes for the custom kernels are configured through `dtypes`, `torch_map`, and `tl_map` in [`v4/config.py`](v4/config.py). This configuration does not automatically control the precision of every FLA or PyTorch operation.
+## Tokenizer and pretraining sample
+
+[`v4/tokenizer/tokenizer-32K.json`](v4/tokenizer/tokenizer-32K.json) is a byte-level BPE tokenizer trained on the downloaded sample. It uses individual-digit splitting, `add_prefix_space=False`, and a full byte alphabet. It has passed exact round-trip checks and has a maximum token ID of 31,999. It has not been formally declared final.
+
+Special tokens in ID order are `<|im_start|>`, `<|im_end|>`, `<|pad|>`, `<|endoftext|>`, `<think>`, and `</think>`.
+
+The intended pretraining mix by tokens is **70% FineWeb-Edu (`sample-10BT`), 15% Cosmopedia-v2, and 15% Stack-Edu (Python)**. Download budgets use upstream token counts or a character estimate, so the stored sample has different proportions under this tokenizer:
+
+| Source | Documents | Actual tokens, including EOT | Share |
+| --- | ---: | ---: | ---: |
+| FineWeb-Edu | 84,377 | 91,265,189 | 72.129% |
+| Cosmopedia-v2 | 23,319 | 17,262,193 | 13.643% |
+| Stack-Edu Python | 21,524 | 18,003,105 | 14.228% |
+| **Total** | **129,220** | **126,530,487** | **100%** |
+
+The sample was downloaded with a 125M proxy-token budget. The `sample-100M` directory name is approximate. Source sampling to enforce 70/15/15 has not been implemented.
+
+Tokenization processes each source separately in batches of up to 1,000 documents, appends one `<|endoftext|>` (ID 3) per document, and writes a flat binary stream with dtype `<u2` (little-endian uint16). No padding or truncation is configured. The three `.bin` files occupy 253,060,974 bytes, approximately 253 MB. `metadata.json` records token counts, the tokenizer path, and the EOT string.
+
+On 2026-11-13, every saved token was compared against re-tokenizing every source document plus its EOT. All three streams matched exactly, file sizes matched metadata, all IDs were valid, and EOT counts matched document counts. First, middle, and last documents per source also decoded exactly to the original text, including Python whitespace.
+
+There is no validation split yet. Packing, attention across document boundaries, and training-time source sampling remain to be implemented. EOT separators alone do not prevent attention across documents.
 
 ## Getting started
 
-### Environment
+Development uses native Windows on an RTX 3090, Ryzen 5 5600X, and 64 GB RAM. [`v4/requirements.txt`](v4/requirements.txt) declares dependency pins, including PyTorch, `triton-windows` on Windows, FLA, Pydantic, Tokenizers, and Datasets. Install CUDA-enabled PyTorch and the platform-appropriate Triton first, then the remaining requirements. The pins describe the declared environment; compatibility still depends on the installed CUDA and platform setup.
 
-Development targets an NVIDIA RTX 3090 with 24 GB VRAM, a Ryzen 5 5600X, and 64 GB DDR4 RAM.
-
-Use a CUDA-enabled PyTorch installation and compatible versions of Triton and flash-linear-attention. A Linux or WSL2 CUDA environment is a practical starting point; consult the upstream FLA installation instructions for supported versions and optional convolution dependencies.
-
-The repository does not yet provide a pinned environment or package installer. V4 also imports Pydantic. After installing CUDA-enabled PyTorch, install the remaining dependencies for your environment, including:
-
-```bash
-pip install pydantic flash-linear-attention
-```
-
-Follow upstream instructions if your platform needs additional build steps. This command alone is not a complete CUDA environment setup.
+Run V4 commands from inside `v4/` so local imports resolve:
 
 ```bash
 git clone https://github.com/gavmc/Mini-K3.git
-cd Mini-K3
+cd Mini-K3/v4
 ```
 
-### Run the recurrent backward test
-
-Run from `v4/` so the current local imports resolve:
+### Download the sample
 
 ```bash
-cd v4
-python -m kernels.tests
+python -m prep.download --total-tokens 125000000 --out-dir data/sample-100M
 ```
 
-The test requires CUDA and Triton. A successful run prints gradient differences and finishes with `All backward gradients match autograd.`
+The downloader writes one parquet per source. Stack-Edu content is fetched from S3 using AWS credentials loaded from `v4/.env`; keep credentials private. Use `--sources` to select individual sources and `--help` for available options.
 
-### Run the V3 synthetic benchmark
+### Tokenize the sample
 
-From the repository root:
+Create the output directory, then run the script's configured entry point:
 
 ```bash
-cd v3
-python bench.py
+python -c "from pathlib import Path; Path('data/tokenized/sample-100M').mkdir(parents=True, exist_ok=True)"
+python -m tokenizer.tokenizer
 ```
 
-The benchmark uses random tokens, `torch.compile`, BF16 autocast, and optimizer steps. It reports parameter counts, step time, throughput, and peak allocated GPU memory. Its default sequence length is 16,384; reduce `T` in `bench.py` if needed.
+This uses the existing 32K tokenizer and writes `fineweb-edu.bin`, `cosmopedia-v2.bin`, `stack-edu-Python.bin`, and `metadata.json` under `data/tokenized/sample-100M/`. Existing output files are overwritten. Raw data and tokenized datasets are excluded from git.
 
-This is a performance probe, not a language-model quality evaluation. FLOP/MFU and token-budget projections are approximate; active-parameter counts are not interchangeable with total parameters or exact compute.
+Read a binary stream without loading the whole file into RAM:
 
-There is no complete V4 training or generation command yet.
+```python
+import numpy as np
+
+tokens = np.memmap(
+    "data/tokenized/sample-100M/fineweb-edu.bin",
+    dtype="<u2",
+    mode="r",
+)
+```
+
+The files have no header; supply the dtype when reading. Convert training batches to `torch.long` before passing them to the model.
+
+### Run the V4 synthetic benchmark
+
+```bash
+python -m tests.throughput.throughput
+```
+
+Edit `runs` and `batch_sizes` at the top of [`throughput.py`](v4/tests/throughput/throughput.py). Run one model and one batch size per process: multiple configurations in one process previously hit the compiler recompile limit and fell back to eager execution. Results append to `v4/tests/throughput/throughput.md`.
+
+The benchmark includes BF16 autocast, backward, gradient clipping, both optimizers, and both schedulers. It is a synthetic performance probe. A complete V4 training or generation command is not available yet.
+
+## Custom KDA kernels
+
+[`v4/kernels/`](v4/kernels/) contains educational PyTorch and Triton recurrent and chunkwise implementations and backward comparisons. These files currently import `dtypes`, `torch_map`, and `tl_map`, which no longer exist in `config.py`, so the kernel scripts do not run as-is. Model training uses FLA.
 
 ## Earlier checkpoint
 
-An earlier model is available at [gav6/mini-k3-125m-sft](https://huggingface.co/gav6/mini-k3-125m-sft).
+An earlier model is available at [gav6/mini-k3-125m-sft](https://huggingface.co/gav6/mini-k3-125m-sft). It uses its own generation code rather than the standard Transformers loading interface.
 
-The model card reports 125.9M total / 63.3M active parameters, 2.39B pretraining tokens, and subsequent instruction tuning. It uses its own generation code rather than the standard Transformers loading interface.
-
-That checkpoint is a research artifact. It can produce fluent text, but instruction following, factual accuracy, repetition, and longer responses remain weak. Improving those behaviors is a central motivation for V4. The checkpoint's results should not be presented as results for the unfinished V4 model.
+That checkpoint is a research artifact. Instruction following, factual accuracy, repetition, and longer responses remain areas for improvement. Its results are separate from V4, which has not yet undergone pretraining.
 
 ## Next steps
 
-- [ ] Assemble the V4 backbone, FFNs, and language-model head.
-- [ ] Integrate and test model-wide recurrent, convolution, and latent caches.
-- [ ] Verify causal behavior and full-sequence versus cached-decoding agreement.
-- [ ] Build reproducible data preparation, training, validation, and checkpoint resume paths.
-- [ ] Benchmark candidate widths and depths on the RTX 3090.
-- [ ] Run short pilots before committing to a full token budget.
-- [ ] Compare dense FFNs with MoE at matched total parameters and measured training time.
-- [ ] Evaluate instruction following, copying, summarization, repetition, and stopping behavior.
-
-AttnRes, alternative expert activations, and more elaborate routing remain experimental choices for V4 rather than prerequisites for a strong baseline.
+- [x] Implement the dense KDA/MLA backbone, tied head, and explicit cache interfaces.
+- [x] Implement Muon + AdamW and WSD scheduling.
+- [x] Benchmark eight candidates and choose a shortlist.
+- [x] Download, tokenize, and verify the pretraining sample.
+- [ ] Add GPU observability to investigate system bottlenecks.
+- [ ] Reserve validation documents and implement packing and source sampling.
+- [ ] Verify causality, full-sequence versus cached decoding, and safe cache branching.
+- [ ] Check finite losses/gradients, fixed-data overfitting, fused CE, and compiled/eager agreement.
+- [ ] Build training, checkpointing, and resume, including RNG and data position.
+- [ ] Run learning pilots and tune optimizer rates before the main run.
+- [ ] Build evaluation, generation, and SFT; check copying, constraints, summarization, and stopping.
+- [ ] Explore MoE and AttnRes as separate later ablations.
 
 ## References
 
-- [Kimi Linear: An Expressive, Efficient Attention Architecture](https://arxiv.org/abs/2510.26692)
-- [flash-linear-attention](https://github.com/fla-org/flash-linear-attention)
-- [MobileLLM: Optimizing Sub-billion Parameter Language Models for On-Device Applications](https://arxiv.org/abs/2402.14905)
-- [SmolLM2: When Smol Goes Big — Data-Centric Training of a Small Language Model](https://arxiv.org/abs/2502.02737)
-- [V4 source notes](v4/sources.md)
+See [`v4/sources.md`](v4/sources.md) for architecture papers, implementation references, training research, dataset cards, and tokenizer/storage documentation.
 
 Built by [Gavin McLaughlan](https://github.com/gavmc).
