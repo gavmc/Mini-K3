@@ -3,12 +3,12 @@ import torch
 import math
 from fla.modules.fused_linear_cross_entropy import fused_linear_cross_entropy_loss
 
-from config import Config
+from config import ModelConfig
 from model.layers import Block
 from util import check_config
 
 class MiniK3(nn.Module):
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: ModelConfig):
         super().__init__()
         check_config(cfg)
 

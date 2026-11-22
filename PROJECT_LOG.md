@@ -307,3 +307,7 @@ Script:
 - Throughput: 2.71 s per update = about 30,200 tokens/s in steady state, faster than the 26,829 tokens/s benchmark at batch 10. The likely reason is one clip and optimizer step per 4 micro-batches instead of one per batch. An evaluation pass took about 14 s; 14 evaluations add about 3 minutes. Time to first update was 230 s (two compiles plus the first evaluation). Total runtime 3,575 s.
 - System (W&B system metrics, after the first 10% of the run): GPU utilisation averaged 96%, with dips during evaluation. GPU memory in use was about 23.8 GB of 25.8 GB (all processes). Host CPU was about 14%, and the process used about 2.7 GB RAM. Data loading was not a bottleneck.
 - At 30,200 tokens/s, 20B tokens would take about 7.7 ideal days for D150_C, excluding evaluation and downtime.
+
+## 2026-11-21 Pilot training configuration
+
+The pilot now reads sampling, batch sizes, optimizer settings, and schedule lengths from `TrainConfig`. The default warmup is 100 updates. The November 18 run used six.

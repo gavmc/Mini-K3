@@ -1,5 +1,5 @@
 from model.model import MiniK3
-from config import Config, OptimConfig, SchedulerConfig
+from config import ModelConfig, OptimConfig, SchedulerConfig
 from optimization.optim import init_optim
 from optimization.scheduler import WSDScheduler
 
@@ -21,7 +21,7 @@ muon_sched_cfg = SchedulerConfig(base_lr=optim_cfg.muon_lr, warmup=0, cooldown=0
 adam_sched_cfg = SchedulerConfig(base_lr=optim_cfg.adam_lr, warmup=0, cooldown=0)
 
 def benchmark(run, batch_size):
-    model_cfg = Config.model_validate(configs[run])
+    model_cfg = ModelConfig.model_validate(configs[run])
 
     model = MiniK3(model_cfg).to("cuda")
     total_params = sum(p.numel() for p in model.parameters())
