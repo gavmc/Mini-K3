@@ -20,3 +20,4 @@ PROJECT_LOG.md
 
 wandb/
 data/
+tests/models/
