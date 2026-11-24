@@ -363,3 +363,19 @@ Profiling (**Measured** by Gavin; read by Claude): `torch.profiler`, 3 active up
 - Tools suggested: CUDA-event timing per phase, `torch.profiler` with Perfetto, `TORCH_LOGS`, Nsight Systems, Nsight Compute (needs GPU performance counters enabled in the NVIDIA Control Panel), `TRITON_PRINT_AUTOTUNING=1`, `triton.testing.do_bench`, and `nvidia-smi dmon`.
 
 Repository state on 2026-11-22: `.gitignore` now ignores `data/` (which covers `v4/data/sample-100M/`) and no longer ignores `PROJECT_LOG.md` at the root, but `PROJECT_LOG.md` is not committed yet. The last `.gitignore` line, `tests/models/PROJECT_LOG.md`, appears to be two entries joined by a missing newline.
+## 2026-11-23: batched CustomMuon
+
+- Updated CustomMuon and selected it in init_optim for the pilot and throughput benchmark. Within each optimizer group, matrices of matching shape, device and dtype run Newton-Schulz in batches of up to eight. Each parameter keeps its own momentum buffer. Matrix normalization, LR adjustment, and decay follow stock PyTorch Muon.
+- Checked four updates against stock Muon on CPU and RTX 3090 using square, tall, and wide matrices, missing and zero gradients, decay, and both Nesterov settings. Momentum buffers and weight changes matched exactly on these small cases.
+- Measured on RTX 3090 using all 210 D150_C Muon parameters with synthetic gradients. The largest first-step difference relative to the stock update norm for one matrix was 1.33%. Across ten synchronized optimizer-only timings per implementation in alternating order, medians were 63.4 ms batched and 153.6 ms stock. Full training throughput, peak memory, and learning curves with batched Muon are unmeasured.
+
+## 2026-11-23: profiler-off Muon throughput comparison
+
+- Added `v4/tests/muon_test.py` and extracted `train_update` from the pilot so both execute the same update. Each optimizer starts from the same seed and reads the same real training windows. CUDA is synchronized at the boundaries of the timed block. Logging, evaluation, profiling, and checkpoint writing are disabled for the comparison.
+- Measured on RTX 3090, compiled D150_C, 40 sequences of 2,048 targets per update at micro-batch 10. Five warmup updates followed by twenty timed updates per optimizer. Stock ran first at 2.492 s/update (32,875 tok/s), then batched at 2.399 s/update (34,148 tok/s), +3.87% throughput. Both peaked at 20.40 GiB allocated during measurement. This was one paired run.
+
+## 2026-11-23: full shape groups and foreach Muon
+
+- CustomMuon now takes 2-D parameters, processes each full group of matching shapes, devices and dtypes, and uses foreach for momentum, Nesterov interpolation, weight decay and updates. The vector fallback was removed.
+- Checked constructor rejection of 1-D and 3-D inputs. Compared three CUDA steps on all 210 D150_C Muon matrices against stock Muon with both Nesterov settings, missing and zero gradients, and weight decay. Momentum buffers matched exactly. The largest per-matrix L2 difference relative to the stock weight change was 1.34%.
+- Measured D150_C on RTX 3090 with the pilot settings and the profiler off. Five warmups and twenty timed updates per optimizer, run in order: stock 32,760 tok/s (2.501 s/update), full groups with foreach 34,200 (2.395 s), previous chunks of eight 33,204 (2.467 s). All three showed 20.43 GiB peak allocated in that session. One run per implementation; the size of the advantage over chunking needs repeated measurements.

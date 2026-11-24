@@ -65,6 +65,30 @@ def evaluate(model, val_sets, micro_batch, split):
     return losses
 
 
+def train_update(update, model, train_cfg, muon_optim, adam_optim, muon_sched, adam_sched, data, train_end):
+    update_loss = torch.zeros((), device="cuda")
+    batch = get_batch(update, train_cfg, data, train_end)
+
+    muon_optim.zero_grad(set_to_none=True)
+    adam_optim.zero_grad(set_to_none=True)
+
+    for micro in batch.split(train_cfg.micro_batch):
+        x = micro.pin_memory().to("cuda", non_blocking=True)
+
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            loss = model(x[:, :-1], x[:, 1:]) * (len(micro) / train_cfg.seqs_per_update)
+
+        loss.backward()
+        update_loss += loss.detach()
+
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.optim.grad_clip)
+    muon_optim.step()
+    adam_optim.step()
+    muon_sched.step()
+    adam_sched.step()
+    return update_loss, grad_norm
+
+
 def train(model, train_cfg, muon_optim, adam_optim, muon_sched, adam_sched, val_sets, data, train_end):
     model.train()
 
@@ -83,26 +107,7 @@ def train(model, train_cfg, muon_optim, adam_optim, muon_sched, adam_sched, val_
         if train_cfg.log and update % train_cfg.eval_every == 0:
             wandb.log(evaluate(model, val_sets, train_cfg.micro_batch, train_cfg.split), step=update)
 
-        update_loss = torch.zeros((), device="cuda")
-        batch = get_batch(update, train_cfg, data, train_end)
-
-        muon_optim.zero_grad(set_to_none=True)
-        adam_optim.zero_grad(set_to_none=True)
-
-        for micro in batch.split(train_cfg.micro_batch):
-            x = micro.pin_memory().to("cuda", non_blocking=True)
-
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                loss = model(x[:, :-1], x[:, 1:]) * (len(micro) / train_cfg.seqs_per_update)
-
-            loss.backward()
-            update_loss += loss.detach()
-
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.optim.grad_clip)
-        muon_optim.step()
-        adam_optim.step()
-        muon_sched.step()
-        adam_sched.step()
+        update_loss, grad_norm = train_update(update, model, train_cfg, muon_optim, adam_optim, muon_sched, adam_sched, data, train_end)
 
         if train_cfg.profile: p.step()
 
