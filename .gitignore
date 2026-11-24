@@ -20,3 +20,4 @@ AGENTS.md
 wandb/
 data/
 tests/models/
+prof/

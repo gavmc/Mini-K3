@@ -28,7 +28,7 @@ def benchmark(run, batch_size):
     model.train()
 
     muon_optim, adam_optim = init_optim(model, optim_cfg)
-    model.compile()
+    model.compile(mode="max-autotune")
     
     muon_sched = WSDScheduler(muon_optim, muon_sched_cfg)
     adam_sched = WSDScheduler(adam_optim, adam_sched_cfg)

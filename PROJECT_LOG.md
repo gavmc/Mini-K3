@@ -311,3 +311,55 @@ Script:
 ## 2026-11-21 Pilot training configuration
 
 The pilot now reads sampling, batch sizes, optimizer settings, and schedule lengths from `TrainConfig`. The default warmup is 100 updates. The November 18 run used six.
+
+## 2026-11-20 to 2026-11-22: run review, pilot changes, profiling (with Claude)
+
+Re-analysis of run `wg617mfb` (**Measured**: Claude parsed the `.wandb` record file and the CSV exports):
+
+- Every validation value in the 2026-11-18 table matches the run record.
+- Warmup was 6 updates, as configured. Logged LRs are post-step values (the LR for the next update). Update 0 ran at 1/6 of peak, and update 5 was the first at full peak. A remark during the review that warmup was 4 updates came from misreading this and is withdrawn.
+- Correction to the 2026-11-18 throughput figure: median 2.559 s per update (about 32,000 tokens/s) excluding evaluation; mean about 2.74 s per update (about 29,900 tokens/s) including the 14 evaluations. The earlier 30,200 tokens/s is effectively the including-evaluation figure. Training-only time for 20B tokens is about 7.3 days, not 7.7.
+- Pre-clip grad norm was above the 1.0 clip for roughly the first 30-45 updates, peaking at 12.45 at update 14. Only two updates after update 100 exceeded twice the median (101 and 445, both about 0.78).
+- The per-update spread of train loss stayed at about 0.11-0.12 from update 600 to the end, including the final 120 updates where the LR is near zero. So the train-loss noise comes from batch composition, not from update size.
+- Val mix by update: 3.655 (800), 3.613 (900), 3.537 (1000), 3.412 (1100), 3.349 (1200), 3.346 (1220). Cooldown gave about 0.10-0.13 more than extrapolating the late constant-phase trend. That is normal for WSD and says nothing either way about whether the peak LR is right.
+- Train loss averaged over the last 50 updates was 3.220, against final val mix 3.346. This fits windows being sampled with replacement.
+
+Proposals and assessments from discussion (not adopted unless marked):
+
+- LR: the early spike fits a warmup that was far too short, not peaks that are too high. Fix warmup first, then halve each optimizer's peak separately and compare after cooldown at equal tokens. Lowering both peaks now would hide which optimizer, if either, is the problem.
+- Per-layer embeddings: hold off. A Gemma 3n-style table (256 dimensions per pair, 20 pairs) is about 164M parameters for D150_C, more than the model itself, plus about 2.4 GiB of AdamW state. Gemma 3n uses it to save on-device memory, which does not apply to training on a 3090. In the LongCat embedding-scaling paper, per-layer embeddings underperformed a parameter-equivalent n-gram embedding at 790M activated parameters. Value embeddings in the MLA layers (from the modded-nanogpt speedrun lineage), zero-initialized, are the preferred variant if this is ever tried, as one ablation.
+- Loss targets: convert to bits per character when comparing tokenizers. At update 1000, about 1.27 (fineweb-edu), 0.91 (cosmopedia-v2), 1.03 (stack-edu). Rough guess for the 20B run: fineweb-edu val about 2.8-2.95 in this tokenizer's units. This was converted from a public GPT-2 124M FineWeb-Edu run (3.077 at 7.3B tokens) using an assumed GPT-2 tokenizer ratio of about 4.6 characters per token; the ratio was not measured. Better approach: score GPT-2 124M and SmolLM2-135M on the same validation documents in bits per byte, and fit L(D) from D150_C runs at about 100M, 300M, and 1B tokens.
+- Expected outcome at 20B tokens (rough estimate): around GPT-3 Small level on standard benchmarks, about 20-35% of the way from GPT-2 124M to SmolLM2-135M on a log-token scale. For example HellaSwag about 31-34, against 29.5 for GPT-2 124M and 42.1 for SmolLM2-135M. Run all models in one evaluation harness before relying on any of this.
+- Sequence length: keep 2048. Mean tokens per document are about 1,082 (fineweb-edu), 740 (cosmopedia-v2), and 836 (stack-edu), so longer windows mostly pack more unrelated documents. Document masking (KDA `cu_seqlens` and a block-diagonal mask for MLA) matters more than the length itself.
+- Possible research direction, raised by Gavin, not decided:
+  - **Long context:** reach at least 32K-64K with the small hybrid. Published continued-pretraining budgets are 0.5-5B tokens for 7B models at 128K (Fu et al.) and 20B tokens at 64K plus 20B at 512K for ProLong-8B. Those results assume ability built up by large-scale pretraining, which a 150M model may not have.
+  - **Sketch for D150_C:** after the 2K main run, continue on about 1-2B tokens at 16-32K, then 0.5-1B at 64K, optionally 0.2-0.5B at 128K, with short-context SFT. Training past the evaluation length helps (ProLong). Estimated throughput is about 15K tokens/s at 32K, 10K at 64K, and 6K at 128K, with activation checkpointing from 64K up. Long documents (books, code repositories) are the main cost; document masking is a prerequisite.
+  - **Research runs:** compare the hybrid with a same-size RoPE transformer; NoPE vs partial-RoPE MLA; the KDA:MLA ratio; checkpoints at several extension token budgets; one smaller model size. Cheap first check: extend the 100M pilot and a plain-transformer pilot by about 200M tokens at 16K, and compare passkey and MQAR accuracy by position.
+  - **Distillation:** Qwen3.5-9B uses a 248,320-entry vocabulary, so logit distillation into the 32K tokenizer is impractical. A 9B teacher's forward pass also costs about 18× the student's training cost per token. Teacher-generated SFT and long-context synthetic data is feasible (9B in FP8 or 4-bit; 27B in 4-bit; vLLM through WSL2, or llama.cpp natively). Check Qwen's license before releasing any distilled weights.
+- Possible project framings, discussed but none chosen: a small-scale study of hybrid linear attention; a readable reference implementation of a Kimi-style hybrid; a documented single-3090 training recipe; a narrow structured-extraction model.
+- Code structure: keep Pydantic configs and add `TrainConfig` (adopted, `1b7ad87`). Proposed: plain functions with no module-level globals, plus a small `TrainState` dataclass for save and load. No trainer class until a second training mode exists.
+
+Pilot script changes (Gavin's working copy, reviewed by Claude; not committed as of 2026-11-22):
+
+- `torch.manual_seed(train_cfg.seed)` before building the model. Model init had been unseeded.
+- Micro-batch loss weighted by `len(micro) / seqs_per_update`. `evaluate` weights each micro-batch by its size.
+- Training loss accumulated as a GPU tensor, with one `.item()` per update instead of four.
+- `profile` and `log` switches; `torch.set_float32_matmul_precision("high")`.
+- Issues found in review, status unknown: the in-loop evaluation was not gated by `log`; a profile run did not stop after the profiler schedule; a profile run would overwrite `tests/runs/D150_C_100M.pt`. An earlier version's profiler schedule had defaulted to `repeat=0` (traces every 8 updates for the whole run) and the profiler was created without `start()`. Both were fixed before the profile below was taken.
+
+Profiling (**Measured** by Gavin; read by Claude): `torch.profiler`, 3 active updates, D150_C, 40 sequences per update.
+
+| | GPU time / update | Muon step | Fused cross-entropy per call | KDA backward / update |
+| --- | ---: | ---: | ---: | ---: |
+| Before TF32 | 2.369 s | 227 ms | 67.1 ms | 255 ms |
+| After TF32 | 2.291 s | 251 ms | 59.6 ms | 249 ms |
+
+- GEMMs (`aten::mm` plus `addmm`) are about 56-57% of GPU time. All the major GEMM kernels are BF16 tensor-core kernels.
+- Before TF32, `cutlass_80_simt_sgemm` kernels (FP32 on CUDA cores, about 6.15 ms each) were the cross-entropy weight-gradient accumulation (**Inspected** in FLA 0.5.2: `accumulate_grad_in_fp32=True`, `torch.addmm(..., out=dw)` with an FP32 `dw`, 8 chunks of 2,560 tokens; autocast does not apply to ops with `out=`). The tied weight is an FP32 parameter, so `accumulate_grad_in_fp32=False` would not change this. TF32 removed these kernels and saved about 3.3% of GPU time per update.
+- **Inspected** in FLA 0.5.2: `fused_linear_cross_entropy_forward` calls `.item()` every call (a GPU sync), and FLA wraps `causal_conv1d_fwd`, `chunk_kda`, and the cross-entropy forward in `torch.compiler.disable`.
+- **Inspected** in PyTorch source: `torch.optim.Muon` casts to BF16 for Newton-Schulz, loops over parameters one at a time, and rejects `foreach`.
+- Graph-break log (`TORCH_LOGS=graph_breaks,recompiles`, **Measured** by Gavin): the breaks occur inside the loops of `MiniK3.forward` (model.py line 49) and `Block.forward` (layers.py line 219), so Dynamo skips both frames and runs them eager, and compiles child calls separately. The profile's compiled regions match this: 180 calls per region (15 KDA layers × 4 micro-batches × 3 updates) and 240 for FFNs. The recompiles seen were `grad_mode` changes, an einops backend guard, and FLA's shared decorator wrapper (`4/2`). None hit the limit.
+- Estimated remaining gains (not measured): batched Muon Newton-Schulz 4-7%; sublayer-level `fullgraph=True` compilation 2-5%, mostly from fusing residual adds. FLA kernel tuning is likely small, since KDA backward is about 11% and its kernels are already autotuned. The card sits at its 350 W power limit, so an undervolt could add a few percent but must be checked for stability.
+- Tools suggested: CUDA-event timing per phase, `torch.profiler` with Perfetto, `TORCH_LOGS`, Nsight Systems, Nsight Compute (needs GPU performance counters enabled in the NVIDIA Control Panel), `TRITON_PRINT_AUTOTUNING=1`, `triton.testing.do_bench`, and `nvidia-smi dmon`.
+
+Repository state on 2026-11-22: `.gitignore` now ignores `data/` (which covers `v4/data/sample-100M/`) and no longer ignores `PROJECT_LOG.md` at the root, but `PROJECT_LOG.md` is not committed yet. The last `.gitignore` line, `tests/models/PROJECT_LOG.md`, appears to be two entries joined by a missing newline.

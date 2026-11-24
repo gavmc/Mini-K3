@@ -65,6 +65,8 @@ class TrainConfig(BaseModel):
     data_dir: Path = Path("data/tokenized/sample-100M")
     split: dict[str, float] = {"fineweb-edu": 0.70, "cosmopedia-v2": 0.15, "stack-edu-Python": 0.15}
     optim: OptimConfig = OptimConfig()
+    profile: bool = False
+    log: bool = True
 
     @property
     def num_updates(self) -> int:
