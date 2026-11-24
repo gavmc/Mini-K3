@@ -137,8 +137,11 @@ if __name__ == "__main__":
     configs = json.loads(Path(__file__).parent.with_name("model_configs.json").read_text())
 
     train_cfg = TrainConfig()
-    train_cfg.log = False
-    train_cfg.profile = True
+    #train_cfg.log = False
+    #train_cfg.profile = True
+    train_cfg.model = "D300_C"
+    train_cfg.micro_batch = 5
+    train_cfg.seqs_per_update = 40
 
     model_cfg = ModelConfig.model_validate(configs[train_cfg.model])
     optim_cfg = train_cfg.optim
@@ -205,5 +208,5 @@ if __name__ == "__main__":
     )
 
     budget = f"{train_cfg.tokens // 1_000_000}M" if train_cfg.tokens % 1_000_000 == 0 else str(train_cfg.tokens)
-    if not train_cfg.profile: torch.save(model.state_dict(), Path("tests/runs") / f"{train_cfg.model}_{budget}.pt")
+    if not train_cfg.profile: torch.save(model.state_dict(), Path("tests/models") / f"{train_cfg.model}_{budget}.pt")
     if train_cfg.log: wandb.finish()

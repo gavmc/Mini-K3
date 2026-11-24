@@ -379,3 +379,19 @@ Repository state on 2026-11-22: `.gitignore` now ignores `data/` (which covers `
 - CustomMuon now takes 2-D parameters, processes each full group of matching shapes, devices and dtypes, and uses foreach for momentum, Nesterov interpolation, weight decay and updates. The vector fallback was removed.
 - Checked constructor rejection of 1-D and 3-D inputs. Compared three CUDA steps on all 210 D150_C Muon matrices against stock Muon with both Nesterov settings, missing and zero gradients, and weight decay. Momentum buffers matched exactly. The largest per-matrix L2 difference relative to the stock weight change was 1.34%.
 - Measured D150_C on RTX 3090 with the pilot settings and the profiler off. Five warmups and twenty timed updates per optimizer, run in order: stock 32,760 tok/s (2.501 s/update), full groups with foreach 34,200 (2.395 s), previous chunks of eight 33,204 (2.467 s). All three showed 20.43 GiB peak allocated in that session. One run per implementation; the size of the advantage over chunking needs repeated measurements.
+
+## 2026-11-24: matched 100M-token pilots on the RTX 3090
+
+**Measured by Gavin, read by Codex from the November 23-24 local W&B histories.** Each model saw the same sampled windows and fixed validation split with seed 0. All ran 1,220 updates of 40 sequences at context 2,048 (99,942,400 target tokens), with batched Muon + AdamW, peaks 0.01 and 0.001, 100 warmup updates and 244 cooldown updates. Evaluation used the 70/15/15 source weights. Training tok/s uses the median interval between logged updates after startup, excluding evaluation updates. Runtime is W&B elapsed time.
+
+| Model | W&B run | Micro-batch | FineWeb-Edu | Cosmopedia | Stack-Edu Python | Val mix | Training tok/s | Runtime |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| D150_C | `jo8mrvmc` | 10 | 3.7111 | 2.9679 | 2.0688 | 3.3532 | 34,282 | 52m 53s |
+| D150_B | `swtereb1` | 10 | 3.7282 | 2.9865 | 2.0853 | 3.3705 | 33,086 | 57m 47s |
+| D300_C | `lcvrxp50` | 5 | 3.6519 | 2.8896 | 2.0172 | 3.2923 | 20,151 | 1h 29m 40s |
+
+- D150_C led D150_B at every post-initialization evaluation and finished 0.0173 lower on the mix. The November 18 D150_C run is a separate comparison: six warmup updates, unseeded model initialization and stock Muon. Its final mix was 3.3456.
+- D300_C finished 0.0609 lower than D150_C at equal tokens. At about 30 minutes, both were in the constant-LR phase: D150_C had reached 3.7472 at update 700, D300_C 4.1884 at update 400. D300_C first logged a loss below D150_C's final 3.3532 at update 1,200 (88 minutes).
+- D300_C attempt `9qdylpyc` used micro-batch 8 and logged one completed update. The traceback shows an FFN forward allocation of 112 MiB failed with 23.06 GiB allocated by PyTorch. The successful run accumulated eight micro-batches of five sequences. All three final state dicts are present in `v4/tests/models/`.
+- **Projection from measured rates:** 20B tokens would take about 6.75 training-only days for D150_C or 11.49 for D300_C, a difference of 4.74 days before evaluation, checkpointing and downtime. These pilots measure one seed and 100M tokens per candidate.
+- **Recommendation from Codex:** use D150_C on the single 3090 given Gavin's concern about the extra training time. D300_C remains the best pilot at equal tokens. Gavin has not declared a final model or recipe.
